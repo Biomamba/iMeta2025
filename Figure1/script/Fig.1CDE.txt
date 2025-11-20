@@ -1,0 +1,190 @@
+# 使用melt函数将数据从宽格式转换为长格式
+cell_proportion_long <- reshape2::melt(cell_proportion, id.vars = "Group", variable.name = "Cell_Type", value.name = "Proportion")
+
+# 加载ggplot2包
+library(ggplot2)
+
+colnames(cell_proportion_long) <- c('Cell_Type','Group','Proportion')
+# 创建绘图对象
+p <- ggplot(cell_proportion_long, aes(x = Group, y = log(Proportion), fill = Cell_Type))
+
+# 添加柱状图的几何对象,并设置高度为log值
+p + geom_bar(stat = "identity", position = "dodge") +
+  # 添加标题和轴标签
+  labs(title = "Proportion of Cell Types in Each Group", x = "Group", y = "log(Proportion)") +
+  # 设置y轴刻度标签显示log前的值
+  scale_y_continuous(labels = scales::label_number()) +
+  # 设置颜色
+  scale_fill_manual(values = cell_color)
+
+
+library(pheatmap)
+
+
+# 使用colorRampPalette()函数生成渐变色
+generate_colors <- colorRampPalette(c("#483D8B","#00FFFF","#F8F8FF","#FF69B4","#8B008B"))
+
+# 生成一百个渐变色
+one_hundred_colors <- generate_colors(100)
+
+pdf(file = paste0(out_dir,'/cell_prop_group_pheatmap.pdf'),width = 4,height = 6)
+pheatmap(cell_proportion[apply(cell_proportion,1,function(x){sum(x)!=0}),],
+         scale = 'row',
+         cluster_cols = F,color =  one_hundred_colors)
+dev.off()
+
+
+# 计算各自的marker和比例  
+ren_tub <- subset(st_rna,
+                  idents = c(  "PTC" ,   "DLH" ,   "ALH"   , "DCT"  ,  "CD-PC" , "CD-IC" ))
+ren_tub <- var2umap(ren_tub)
+
+library(Seurat)
+library(SeuratDisk)
+SaveH5Seurat(st_rna, filename = "st_rna_8_sample.h5Seurat")
+Convert("st_rna_8_sample.h5Seurat", dest = "h5ad")# 报错
+
+
+if(!require(MuDataSeurat))remotes::install_github("zqfang/MuDataSeurat", force = T)
+MuDataSeurat::WriteH5AD(st_rna, "st_rna_8_sample.h5ad", assay="RNA")
+
+joined_st <- JoinLayers(st_rna)
+MuDataSeurat::WriteH5AD( JoinLayers(st_rna), "joined_st_rna_8_sample.h5ad", assay="RNA")
+ 
+saveRDS(joined_st ,'joined_st.rds')
+
+stromal.markers <- FindAllMarkers(stromal, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25) 
+#寻找每一个分类群与其他所有细胞之间的标记基因,并只显示positive结果
+library(dplyr)
+top10gene <- stromal.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) 
+
+pdf(file = 'top10marker.pdf',width = 15,height = 6.5)
+VlnPlot(stromal, features = unique(top10gene$gene),stack = T)
+dev.off()
+
+
+top3gene <- stromal.markers %>% group_by(cluster) %>% top_n(n = 3, wt = avg_log2FC) 
+
+pdf(file = 'stromal_top3marker.pdf',width = 7,height = 4)
+VlnPlot(stromal, features = unique(top3gene$gene),stack = T)
+dev.off()
+
+library(ggthemes)
+pdf(file = 'stromal_top10.dot_plot.pdf',width = 15,height = 8)
+DotPlot(st_rna,features =unique( top10gene$gene))+
+  theme( axis.text.x.bottom = element_text(angle = 45,hjust = 1,vjust = 1))
+dev.off()
+
+
+ICs <- subset(st_rna,idents = c('T Cell','Mac','B Cell','Neu'))
+ICs <- var2umap(ICs)
+
+ICs.markers <- FindAllMarkers(ICs, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25) 
+IC_top10gene <- ICs.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) 
+
+pdf(file = 'ICs_top10marker.pdf',width = 15,height = 6.5)
+VlnPlot(ICs, features = unique(IC_top10gene$gene),stack = T)
+dev.off()
+
+IC_top3gene <- ICs.markers %>% group_by(cluster) %>% top_n(n = 3, wt = avg_log2FC) 
+pdf(file = 'ICs_top3marker.pdf',width = 6,height = 6.5)
+VlnPlot(ICs, features = unique(IC_top3gene$gene),stack = T)
+dev.off()
+
+makecore <- function(workcore,memory){
+  if(!require(Seurat))install.packages('Seurat')
+  if(!require(future))install.packages('future')
+  plan("multisession", workers = workcore)
+  options(future.globals.maxSize= memory*1024*1024**2)
+}
+makecore(20,20)#这里以八线程,1GB为例,
+
+PTC_marker <- FindMarkers(st_rna,ident.1 = 'PTC',ident.2 = c('Mac', 'ALH', 'DCT', 'CD-IC', 'CD-PC', 'EnC',
+                                                             'B Cell', 'SMC' ,'Podo', 'T Cell','DLH', 'Neu', 'PEC', 'NKC'))
+library(dplyr)
+ptc_top <- top_n(PTC_marker,n=-30,wt = p_val_adj)
+VlnPlot(st_rna,features = rownames(ptc_top),stack = T)
+
+clean_st <- subset(st_rna,idents = unique(st_rna$ten_Cell_type)[unique(st_rna$ten_Cell_type)!='NKC'])
+saveRDS(clean_st,'clean_st.rds')
+
+
+
+
+PTC_marker <- FindMarkers(st_rna,ident.1 = 'PTC',ident.2 = c('Mac', 'ALH', 'DCT', 'CD-IC', 'CD-PC', 'EnC',
+                                               'B Cell', 'SMC' ,'Podo', 'T Cell','DLH', 'Neu', 'PEC', 'NKC'))
+library(dplyr)
+PTC_marker <- filter(PTC_marker,avg_log2FC > 0)
+ptc_top <- top_n(PTC_marker,n=-30,wt = p_val_adj)
+VlnPlot(st_rna,features = rownames(ptc_top),stack = T)
+
+top10_ptc <- top_n(PTC_marker,wt=p_val ,n = -10)
+VlnPlot(st_rna,features = rownames(top10_ptc),pt.size = 0)
+
+DotPlot(st_rna,features =rownames(top10_ptc)[1:10])
+# Acsm2 Rida Sord Inmt Cyp2j5 Pdzk1 Fbp1 Chpt1
+
+
+# 在肾脏的单细胞数据中,特异性表达基因Acsm2、Rida、Sord、Inmt、Cyp2j5、Pdzk1、Fbp1和Chpt1的细胞类型是肾小管上皮细胞（尤其是近端小管细胞）。
+# 
+# 这些基因中的一些已经被研究表明在肾脏近端小管细胞中高表达：
+# 
+# Acsm2（Acyl-CoA synthetase medium-chain family member 2）：常见于近端小管细胞。
+# Cyp2j5（Cytochrome P450 family 2 subfamily J member 5）：在肾脏近端小管细胞中表达较多。
+# Pdzk1（PDZ domain containing 1）：在肾脏近端小管细胞中表达,并参与肾小管功能调控。
+# Fbp1（Fructose-1,6-bisphosphatase 1）：在肾脏近端小管中表达,是葡萄糖异生过程的关键酶。
+# 这些基因的表达模式表明它们在参与肾小管细胞的代谢和功能调节。
+# 因此,表达这些基因的细胞类型很可能是近端小管细胞,它们在肾脏中扮演重要角色,负责物质的吸收和代谢。
+library(ggplot2)
+st_rna$ten_Cell_type <- factor(st_rna$ten_Cell_type,
+                               levels = cell_order)
+Idents(st_rna) <- 'ten_Cell_type'
+st_gv_mk <- c('Acsm2','Pdzk1','Fbp1','Cyp2j5',# PTC
+              'Aqp1','Cryab','S100a6','Psca',# DLH
+              'Slc12a1','Umod',# ALH
+              'Slc12a3','Pvalb', # DCT
+              'Aqp2','Hsd11b2','Fxyd4',# CD-PC
+              'Atp6v1g3','Slc4a9',# CD-IC
+              'Ly6c1','Igfbp3','Flt1',# EnC
+              'Akap12','Cp',# PEC
+              'Thsd7a','Ptpro','Synpo',# Podo
+              'Acta2','Myl9','Tpm2',# SMC
+              'Cd3g',# T Cell
+              'C1qb','C1qc',# Mac
+              'Ly6d','Ighm','Cd79b',# B Cell
+              'S100a9','Csf3r'# ,'Retnlg'# Neu
+              
+) 
+
+
+DotPlot(st_rna,features = st_gv_mk,scale.by = 'size')+ 
+  scale_color_gradientn(colors = one_hundred_colors)+
+  theme( axis.text.x.bottom = element_text(angle = 45,hjust = 1,vjust = 1))
+  
+
+clean_st <- subset(st_rna,
+                   idents = unique(st_rna$ten_Cell_type)[!c(unique(st_rna$ten_Cell_type)   %in% c('NKC','MC'))]
+                   )
+# clean_st <- st_rna[,!c(st_rna$ten_Cell_type   %in% c('NKC','MC'))]
+
+clean_cell_order = c('PTC', 'DLH','ALH','DCT','CD-PC','CD-IC',
+               'EnC','PEC','Podo','SMC',
+               'T Cell','Mac','B Cell','Neu')
+clean_st$ten_Cell_type <- factor(clean_st$ten_Cell_type,
+                                 levels = clean_cell_order) 
+Idents(clean_st) <- 'ten_Cell_type'
+DotPlot(clean_st,features = st_gv_mk,scale.by = 'size')+ 
+  scale_color_gradientn(colors = one_hundred_colors)+
+  theme( axis.text.x.bottom = element_text(angle = 45,hjust = 1,vjust = 1))
+
+ggsave(filename = '../output/03.in_Seurat/clean_mk.dotplot.pdf',
+       width = 10,height = 4)
+
+
+
+VlnPlot(clean_st,features = st_gv_mk,stack = T)+
+  theme( axis.text.x.bottom = element_text(angle = 45,hjust = 1,vjust = 1))
+ggsave(filename = '../output/03.in_Seurat/clean_mk.vlnplot.pdf',
+       width = 10,height = 4)
+
+saveRDS(clean_st,'../output/03.in_Seurat/eight_sample_clean_st.rds')

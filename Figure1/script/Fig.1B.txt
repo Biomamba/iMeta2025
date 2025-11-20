@@ -1,0 +1,182 @@
+##### 1 singler处理后的h5ad处理 #####
+rm(list = ls());gc()
+file_list <- list.files('F:/My_wsl/analysis/ST/output/02.cell_count/metadata/') 
+pca <- read.csv('F:/My_wsl/analysis/ST/output/02.cell_count/metadata/pca_metadata.csv')
+St_annotation <- read.csv('F:/My_wsl/analysis/ST/output/02.cell_count/metadata/St_annotation_metadata.csv')
+umap <- read.csv('F:/My_wsl/analysis/ST/output/02.cell_count/metadata/umap_metadata.csv')
+obs <- read.csv('F:/My_wsl/analysis/ST/output/02.cell_count/obs_metedata.csv')
+
+
+head(pca)
+head(St_annotation)
+head(umap)
+head(obs)
+
+# 顺序和dim完全一样,几个数据可以合并
+table(St_annotation$bins ==obs$X)
+
+colnames(umap) <- c('UMAP1','UMAP2')
+all_meta <- cbind(obs,pca,St_annotation,umap)
+library(dplyr)
+all_meta$Sample <- recode(all_meta$batch,
+                          '0'='Ctrl3','1' = 'Ctrl6','2'= 'DKD8','3'= 'DKD19', 
+                          '4'='EB11','5' = 'EB32','6'= 'HT15','7' ='HT31')
+
+all_meta$Group <- sapply(all_meta$Sample,function(x){gsub('//d','',x)})
+
+table(all_meta$first_labels==all_meta$group)
+# 这两列的值是不完全一样的
+# FALSE    TRUE 
+# 203496 1520890 
+
+table(all_meta$first_labels)
+# ALH B Cell  CD-IC  CD-PC    DCT    DLH    EnC    Mac     MC    Neu    NKC    PEC   Podo    PTC    SMC T Cell 
+# 362929  16146  23521  40727 177928  42771  63968  42841  17639  33914   8736  32059  15947 825486  17565   2209 
+
+table(all_meta$group)
+# ALH B Cell  CD-IC  CD-PC    DCT    DLH    EnC    Mac     MC    Neu    NKC    PEC   Podo    PTC    SMC T Cell 
+# 331594  17104  28281  42368 186308  40119  61514  43766  12675  26702   5027  42193  16675 850067  17374   2619 
+
+table(all_meta$Sample,all_meta$group)
+
+cell_color = c("#ADB6B6FF","#EE0000FF", "#008B45FF", "#631879FF", "#008280FF",  "#8A9045FF", "#A20056FF",   "#1B1919FF",               
+              "#BC3C29FF", "#0072B5FF", "#E18727FF",  "#7876B1FF", "#6F99ADFF", "#FFDC91FF", "#EE4C97FF", "#FDAF91FF")
+
+
+# 创建pdf文件保存
+pdf("colors.pdf", width=6, height=4)
+
+# 创建一个条形图显示这些颜色
+barplot(rep(1, length(cell_color)), col=cell_color, border=NA, space=0, 
+        main="颜色示例", xlab="颜色", ylab="", axes=FALSE)
+
+# 关闭pdf文件
+dev.off()
+cell_order = c('PTC', 'DLH','ALH','DCT','CD-PC','CD-IC',
+              'EnC','PEC','Podo','SMC','MC',
+              'T Cell','Mac','B Cell','Neu','NKC')
+
+all_meta$group <- factor(all_meta$group,levels = cell_order) 
+
+library(ggthemes)
+p <- ggplot(all_meta,
+            aes(x=UMAP1,y=UMAP2,col=group))+
+  scale_color_manual(values = cell_color)+
+  geom_point(size=0.1)+
+  theme_bw()+
+  theme_few()+
+  theme_classic()+
+  stat_ellipse(aes(fill=group),
+               geom = "polygon",
+               linetype = 2,       
+               linewidth=1,              
+               alpha=0.2)+          
+  scale_fill_manual(values = cell_color)+
+  theme(axis.ticks = element_blank(), axis.text.y = element_blank())+#隐藏坐标轴刻度
+  theme(axis.text.x = element_blank(),axis.text.y = element_blank())+#隐藏坐标轴文本
+  theme(axis.line = element_line(arrow = arrow(length = unit(0.1, 'cm'))))
+
+p
+
+
+p1 <- p + facet_grid(group~ Group)
+ggsave(plot = p1,filename = 'F:/My_wsl/analysis/ST/output/02.cell_count/Celltype_Group_umap.pdf',width = 20,height = 20)
+
+
+### 从h5ad中读取 ###  
+#remotes::install_github("mojaveazure/seurat-disk")
+library(SeuratDisk)
+filname <- 'F:/My_wsl/analysis/ST/output/00.before_pro/seurat_h5ad/Ctrl3.cell_bin.h5ad'
+Convert(filname, "h5seurat",#先转换为h5seurat
+        overwrite = T,assay = "RNA")
+scRNA <- LoadH5Seurat('F:/My_wsl/analysis/ST/output/00.before_pro/seurat_h5ad/Ctrl3.cell_bin.h5seurat', 
+                      meta.data = FALSE)# , misc = FALSE
+scRNA
+
+
+pbmc <- CreateSeuratObject(counts = pbmc.data, 
+                           project = "pbmc3k", min.cells = 3, min.features = 200)
+#min.cells表示基因至少在几个细胞中表达,min.genes代表每个细胞中至少表达多少基因,细胞的平均reads数量> 5万一般比较好,否则需要补测
+scRNA[["percent.mt"]] <- PercentageFeatureSet(scRNA, pattern = "^mt-") #通过线粒体的序列数来对数据进行计算
+# 计算每个细胞的总RNA计数
+# 计算每个细胞的总基因数（检测到的非零基因计数）
+scRNA[['nFeature_RNA']] <- Matrix::colSums(scRNA@assays$RNA@counts)
+
+# 计算每个细胞的总RNA分子数（总计数）
+scRNA[['nCount_RNA']] <- Matrix::colSums(scRNA@assays$RNA@counts)
+
+outdir <- 'F:/My_wsl/analysis/ST/output/03.in_Seurat/raw_process'
+dir.create('F:/My_wsl/analysis/ST/output/03.in_Seurat/raw_process')
+pdf(file = paste0(outdir,'Feature.Count.percent.mt.pdf') ,height = 6,width = 18)
+VlnPlot(scRNA, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) 
+dev.off()
+
+
+
+DimPlot(scRNA,reduction = 'spatial',raster=FALSE,group.by = 'St_annotation')
+
+VlnPlot(scRNA,features = 'Slc12a3',group.by = 'St_annotation')
+
+scRNA <- NormalizeData(scRNA, verbose = T)
+
+
+#默认的方法也完成了log1p的操作,得到的结果就类似于TPM的对数
+scRNA <- FindVariableFeatures(scRNA, selection.method = "vst", nfeatures = 2000)
+# 筛选高变基因（输出2000个）,用于下游的PCA及分群
+top10 <- head(VariableFeatures(scRNA), 10) #输出差异最大的十个基因
+plot1 <- VariableFeaturePlot(scRNA)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+CombinePlots(plots = list(plot1, plot2))  #输出差异基因散点图（有无标签）
+scRNA <- ScaleData(scRNA, features =  VariableFeatures(scRNA)) #将数据进行标准化,为后续的PCA分析做准备,数据存在scRNA[["RNA"]]@scale.data
+
+scRNA <- RunPCA(scRNA, features = VariableFeatures(object = scRNA)) #PCA降维分析
+
+DimHeatmap(scRNA, dims = 1:15, cells = 500, balanced = TRUE) #展示15种PCA
+
+#JackStrawPlot相当于高级PCA,为挑选合适维度进行下游可视化提供依据
+ElbowPlot(scRNA) #利用ElbowPlot来评价PC,PCA切记为了结果好看而降低PC数
+
+scRNA <- FindNeighbors(scRNA, dims = 1:15)
+
+scRNA <- RunUMAP(scRNA, dims = 1:15) #运行UMAP算法
+#sce.all <- RunUMAP(sce.all, dims = 1:30, min.dist = 0.01, n.neighbors = 4L)
+
+dir.create('F:/My_wsl/analysis/ST/output/03.in_Seurat')
+
+pdf(file = 'F:/My_wsl/analysis/ST/output/03.in_Seuratsimglesample.umap.pdf',width = 80,height = 5)
+DimPlot(scRNA, reduction = "umap", label = TRUE,group.by = 'St_annotation',cols = cell_color,raster = F,split.by = 'St_annotation')
+dev.off()
+
+## 可以看出各个细胞类型的区分度不是很大,考虑将PTC、其它基质细胞、免疫细胞分开来做可视化
+stromal <- subset(scRNA,idents = c('DLH', 'ALH', 'DCT', 'CD-PC', 'CD-IC', 'EnC', 'PEC' ,'Podo', 'SMC', 'MC'))
+
+var2umap <- function(seurat_obj){
+  
+  seurat_obj <- FindVariableFeatures(seurat_obj, selection.method = "vst", nfeatures = 2000)
+  # 筛选高变基因（输出2000个）,用于下游的PCA及分群
+  top10 <- head(VariableFeatures(seurat_obj), 10) #输出差异最大的十个基因
+  plot1 <- VariableFeaturePlot(seurat_obj)
+  plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+  CombinePlots(plots = list(plot1, plot2))  #输出差异基因散点图（有无标签）
+  seurat_obj <- ScaleData(seurat_obj, features =  VariableFeatures(seurat_obj)) #将数据进行标准化,为后续的PCA分析做准备,数据存在seurat_obj[["RNA"]]@scale.data
+  
+  seurat_obj <- RunPCA(seurat_obj, features = VariableFeatures(object = seurat_obj)) #PCA降维分析
+  
+  DimHeatmap(seurat_obj, dims = 1:15, cells = 500, balanced = TRUE) #展示15种PCA
+  
+  #JackStrawPlot相当于高级PCA,为挑选合适维度进行下游可视化提供依据
+  ElbowPlot(seurat_obj) #利用ElbowPlot来评价PC,PCA切记为了结果好看而降低PC数
+  
+  seurat_obj <- FindNeighbors(seurat_obj, dims = 1:15)
+  
+  seurat_obj <- RunUMAP(seurat_obj, dims = 1:15) #运行UMAP算法
+  return(seurat_obj)
+}
+
+
+stromal <- var2umap(stromal)
+
+
+pdf(file = 'F:/My_wsl/analysis/ST/output/03.in_Seurat/stromal.simglesample.umap.pdf',width = 50,height = 5)
+DimPlot(stromal, reduction = "umap", label = TRUE,group.by = 'St_annotation',cols = cell_color,raster = F,split.by = 'St_annotation')  
+dev.off()
