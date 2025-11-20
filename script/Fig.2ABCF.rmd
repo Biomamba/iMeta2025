@@ -1,0 +1,528 @@
+---
+title: "Fig.1B"
+author: "Biomamba"
+date: "2025-08-11"
+output: openintro::lab_report
+---
+  
+# 1.SCENIC analysis  
+  
+```{r,eval=FALSE}
+library(ggplot2)
+library(ggrepel)
+library(edgeR)
+setwd('/mnt/f/My_wsl/analysis/ST/')
+
+# colorRampPalette() color generation
+generate_colors <- colorRampPalette(c("#483D8B","#00FFFF","#F8F8FF","#FF69B4","#8B008B"))
+
+one_hundred_colors <- generate_colors(100)
+
+
+##### R SCENIC  ######  
+# require package
+if(!require(SCENIC))BiocManager::install(c("AUCell", "RcisTarget"),ask = F,update = F);BiocManager::install(c("GENIE3"),ask = F,update = F)
+if(!require(SCENIC))BiocManager::install(c("zoo", "mixtools", "rbokeh"),ask = F,update = F) 
+# t-SNEs dependency
+if(!require(SCENIC))BiocManager::install(c("DT", "NMF", "ComplexHeatmap", "R2HTML", "Rtsne"),ask = F,update = F)
+if(!require(SCENIC))BiocManager::install(c("doMC", "doRNG"),ask = F,update = F)# no windows version, only Linux version
+if(!requireNamespace("devtools", quietly = TRUE))install.packages("devtools")
+# if(!require(SCopeLoomR))devtools::install_github("aertslab/SCopeLoomR", build_vignettes = TRUE)
+if(!requireNamespace("arrow", quietly = TRUE))BiocManager::install('arrow')
+# required for runSCENIC_2_createRegulons()
+if(!require(SCENIC))devtools::install_github("aertslab/SCENIC") 
+
+# loading data
+clean_st <- readRDS('/mnt/f/My_wsl/analysis/ST/R脚本/after_tableNet_clean_st.rds')
+# F://My_wsl//analysis//ST//R脚本//after_tableNet_clean_st.rds
+
+
+library(dplyr)
+#可视化输出 
+library(Seurat)
+to_bin_m <-  function(seu_obj){
+  exprMat <- as.matrix(seu_obj@assays$Spatial@counts)
+  spatial_loc <- seu_obj@meta.data[, c('x', 'y', 'Sample', 'predicted_group')]
+  
+  # drive coords 
+  coords <- spatial_loc[, c("x", "y")]
+  
+  # Approaching point
+  num_neighbors_x <- 10  # x axis
+  num_neighbors_y <- 10  # y axis
+  final_neighbors <- 8   # final cell number
+  
+  # expre data
+  new_expr_list <- list()
+  
+  # record cell of bins
+  merged_cells <- vector("logical", length = nrow(spatial_loc))
+  names(merged_cells) <- rownames(spatial_loc)
+  
+  # traversal
+  for (cell in rownames(spatial_loc)) {
+    # skip for bin
+    if (merged_cells[cell]) next
+    
+    # get coords
+    cell_coords <- coords[cell, , drop = FALSE]
+    
+    # find approching cell of x axis
+    x_distances <- abs(coords$x - cell_coords$x)
+    nearest_x <- order(x_distances)[1:num_neighbors_x]
+    
+    # find approching cell of y axis
+    y_distances <- abs(coords$y - cell_coords$y)
+    nearest_y <- order(y_distances)[1:num_neighbors_y]
+    
+    # megre and deduplicate
+    all_nearest <- unique(c(nearest_x, nearest_y))
+    
+    # filter
+    all_nearest <- all_nearest[!merged_cells[rownames(coords)[all_nearest]]]
+    
+    # physical distance
+    distances <- sqrt((coords$x[all_nearest] - cell_coords$x)^2 + 
+                        (coords$y[all_nearest] - cell_coords$y)^2)
+    
+    # nearest 8 cells
+    final_nearest <- all_nearest[order(distances)[1:final_neighbors]]
+    
+    # add to bin 
+    bin_cells <- c(cell, rownames(coords)[final_nearest])
+    
+    # keep existing cells
+    bin_cells <- intersect(bin_cells, colnames(exprMat))
+    
+    # mean
+    if (length(bin_cells) > 0) {
+      new_expr_list[[cell]] <- rowMeans(exprMat[, bin_cells, drop = FALSE])
+    }
+    
+    # merge
+    merged_cells[bin_cells] <- TRUE
+  }
+  
+  # list to dataframe()
+  new_exprMat <- do.call(cbind, new_expr_list)
+  temp_meta <- spatial_loc[colnames(new_exprMat),]
+  return(list(new_exprMat,temp_meta))
+}
+
+# 'B Cell',
+for (runcell in c('Mac','Neu','B Cell')) {
+  scRNAsub <- clean_st[,clean_st$cell_bin_first_type==runcell]
+  if(ncol(scRNAsub)<8*27){next}
+  # get expression data an coord
+  # required packages
+  library(FNN)
+  new_count <- NULL
+  new_meta <- NULL
+  for (run_sample in c(unique(scRNAsub$Sample))) {
+    result <- to_bin_m(scRNAsub[,scRNAsub$Sample==run_sample])
+    new_count <- cbind(new_count,result[[1]])
+    new_meta <- rbind(new_meta,result[[2]])
+  }
+  
+  scRNAsub <- CreateSeuratObject(new_count)
+  scRNAsub <- AddMetaData(scRNAsub, metadata = new_meta)
+  
+  setwd('/mnt/f/My_wsl/analysis/ST/output/cell_bin/Rscenic/')
+  dir.create(paste0(runcell,'_scenic'))
+  setwd(paste0(runcell,'_scenic'))
+  my_db <- list.files("/mnt/f/My_wsl/analysis/ST/output/cell_bin/Rscenic/mm9.mouse/")
+
+  
+  data(list="motifAnnotations_mgi_v9", package="RcisTarget")
+  motifAnnotations_mgi <- motifAnnotations_mgi_v9 
+  scenicOptions <- initializeScenic(org="mgi",#mouse for 'mgi', human for'hgnc',fly for 'dmel') 
+                                    dbDir="/mnt/f/My_wsl/analysis/ST/output/cell_bin/Rscenic/mm9.mouse/", #'F:/My_wsl/analysis/ST/scenic/RSCENIC_mm10/',#
+                                    # dbs = my_db,
+                                    nCores=8
+  )# parallel
+  scenicOptions@inputDatasetInfo$cellInfo <- "int/cellInfo.Rds"
+  saveRDS(scenicOptions, file="int/scenicOptions.Rds") 
+  dir.create('int')
+
+  cellInfo <- as.data.frame(scRNAsub@meta.data)
+  saveRDS(cellInfo,'int/cellInfo.rds')
+  
+  exprMat <- as.matrix(scRNAsub@assays$RNA@layers$counts)
+  colnames(exprMat) <- colnames(scRNAsub)
+  rownames(exprMat) <- rownames(scRNAsub)
+  genesKept <- geneFiltering(
+    exprMat,
+    scenicOptions,
+    minCountsPerGene = 1 * 0.01 * ncol(exprMat),  
+    minSamples = ncol(exprMat) * 0.005        
+  )
+
+  exprMat_filtered <- exprMat[genesKept, ]
+  exprMat_filtered[1:4,1:4]
+  runCorrelation(exprMat_filtered, scenicOptions)
+  exprMat_filtered_log <- log2(exprMat_filtered+1) 
+  runGenie3(exprMat_filtered_log, scenicOptions)
+  
+  exprMat_log <- log2(exprMat+1)
+
+  scenicOptions <- runSCENIC_1_coexNetwork2modules(scenicOptions)
+  # library(BiocParallel)
+  # nCores <- 6
+  # bp.params <- SnowParam(nCores, type = "SOCK")
+  # register(bp.params, default = TRUE)
+  # scenicOptions@settings$nCores <- nCores
+  scenicOptions <- runSCENIC_2_createRegulons(scenicOptions, 
+                                              coexMethod=NULL) 
+  # doParallel only work in Linux 
+
+  
+  scenicOptions <- runSCENIC_3_scoreCells(scenicOptions, exprMat_log,skipHeatmap = T,skipTsne = T)
+  #skip EnC and skipTsne=TRUE
+  scenicOptions <- runSCENIC_4_aucell_binarize(scenicOptions,skipTsne=T,skipHeatmaps = T)
+
+  tsneAUC(scenicOptions, aucType="AUC") # choose settings
+  tsneAUC(scenicOptions, aucType="AUC",nPcs = 20) # choose settings
+  
+  ##### save the results #####
+  export2loom(scenicOptions, exprMat)
+  saveRDS(scenicOptions, file="int/scenicOptions.Rds") 
+  
+  # TF enrichement：
+  library(Seurat) 
+  library(SCENIC)
+  library(doParallel)
+  scenicOptions=readRDS(file="int/scenicOptions.Rds")
+  motifEnrichment_selfMotifs_wGenes <- loadInt(scenicOptions, 
+                                               "motifEnrichment_selfMotifs_wGenes") 
+  
+  ###### motif number of genes
+  as.data.frame(sort(table(motifEnrichment_selfMotifs_wGenes$highlightedTFs),
+                     decreasing = T))
+  
+  ##### visualize motif
+  library(htmltools)
+  dir.create('my.motifEnrichment/')
+  dir.create('my.regulonTargetsInfo')
+  for (run.tf in unique(motifEnrichment_selfMotifs_wGenes$highlightedTFs)[1]) {
+    tableSubset <- motifEnrichment_selfMotifs_wGenes[
+      highlightedTFs==run.tf]
+    save_html(viewMotifs(tableSubset) ,paste0('my.motifEnrichment/',run.tf,
+                                              '.motifEnrichment.html'))
+    
+    #### activte regulon
+    regulonTargetsInfo <- loadInt(scenicOptions, "regulonTargetsInfo")
+    tableSubset <- regulonTargetsInfo[TF==run.tf & highConfAnnot==TRUE]
+    save_html(viewMotifs(tableSubset) ,paste0('my.regulonTargetsInfo/',run.tf,
+                                              'regulonTargetsInfo.html'))
+  }
+  
+  
+}
+
+```
+  
+# 2.differential analysis  
+```{r,eval=FALSE}
+# ,'Neu'
+for (runcell in celltype) {
+setwd('F:/My_wsl/analysis/ST/output/cell_bin/Rscenic/')
+setwd(paste0(runcell,'_scenic'))
+temp.reg.score <- getAUC(readRDS('int/3.4_regulonAUC.Rds'))
+
+
+# 使用colorRampPalette()函数生成渐变色
+generate_colors <- colorRampPalette(c("#483D8B","#00FFFF","#F8F8FF","#FF69B4","#8B008B"))
+
+# 生成一百个渐变色
+one_hundred_colors <- generate_colors(100)
+
+my_anno_col <- data.frame(CB = colnames(temp.reg.score),
+                          Group = colnames(temp.reg.score) %>% 
+                            lapply(.,function(x){strsplit(x,'_')[[1]][2]})%>% 
+                            unlist() %>% gsub('//d','',.))
+rownames(my_anno_col) <- my_anno_col$CB
+library(limma)
+dir.create('./output/diff')
+for (rungroup in  c("Ctrl" ,  "EB",   "HT"  )) {
+  temp.reg.score <- temp.reg.score[apply(temp.reg.score,1,
+                                         function(x){sum(x>0)>4}),]
+  
+  s1<-colnames(temp.reg.score)[my_anno_col$Group==rungroup] # 属于类型1
+  s2<-colnames(temp.reg.score)[my_anno_col$Group=='DKD']# 属于类型2   最终FC值为类型1/类型2
+  
+  pvalue = padj = log2FoldChange = matrix(0, nrow(temp.reg.score), 1)
+  
+  for(i in 1:nrow(temp.reg.score)){
+    pvalue[i, 1] = p.value = wilcox.test(as.numeric(temp.reg.score[i, s1]), as.numeric(temp.reg.score[i, s2]))$p.value
+    log2FoldChange[i, 1] = log2(mean(as.numeric(temp.reg.score[i, s1]))/mean(as.numeric(temp.reg.score[i, s2])))
+  }
+  
+  padj = p.adjust(as.vector(pvalue), "fdr", n = length(pvalue))
+  rTable = data.frame(log2FoldChange, pvalue, padj, row.names = rownames(temp.reg.score))
+  treatment_Log2TPM <- signif(apply(temp.reg.score[rownames(rTable), s1], 1, mean), 4)
+  control_Log2TPM <- signif(apply(temp.reg.score[rownames(rTable), s2], 1, mean), 4)
+  
+  
+  DGE <- rep("NC", nrow(temp.reg.score))
+  DGE[((rTable$pvalue) < 0.05) & (rTable$log2FoldChange > 0)] = "UP"
+  DGE[((rTable$pvalue) < 0.05) & (rTable$log2FoldChange < 0)] = "DN"
+  gene = rownames(temp.reg.score)
+  rTable = data.frame(treatment_Log2TPM, control_Log2TPM, rTable[, c("log2FoldChange", "pvalue", "padj")], DGE)
+  head(rTable)
+  
+  write.csv(rTable,paste0('./output/diff/',runcell,'_',
+                      rungroup,'_vs_DKD.con.reg.diff.csv'))
+}
+
+total_tiff <- data.frame()
+
+for (runcell in c('DLH','ALH','CD-PC','EnC','Podo',
+                  'PEC','SMC','Mac')) {
+  temp_diff <- read.csv(paste0('F:/My_wsl/analysis/ST/output/cell_bin/Rscenic/',runcell,
+                           '_scenic/output/diff/',runcell,
+                           'tf_diff.csv'))
+  temp_diff$Celltype <- runcell
+  total_tiff <- rbind(total_tiff,temp_diff)
+}
+total_tiff$regulon <- lapply(total_tiff$X,function(x){strsplit(x,'//(')[[1]][1]} )  %>% 
+  lapply(.,function(x){strsplit(x,' ')[[1]][1]}) %>%
+  unlist()
+
+total_tiff <- total_tiff[total_tiff$regulon %in% c('Klf','Cebpb','Rel','Stat1',
+                                                  'Jun','Junb','Tbx21'),]
+total_tiff <- total_tiff[total_tiff$padj < 0.05,] 
+ggplot(total_tiff,
+       aes(x = reorder(regulon , log2FoldChange),
+                    y = log2FoldChange ,
+           color = Group)) +
+  geom_segment(aes(x = regulon, xend = regulon, y = 0,
+                   yend = log2FoldChange)) +
+  geom_point(data = total_tiff,aes(size = pvalue_log10),
+             alpha = 0.5) +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "DEG Expression Changes",
+       x = "DEG",
+       y = "Log2 Fold Change") +
+  scale_color_manual(values = c("Ctrl" = "skyblue", "IRB" = "darkcyan", "TFA" = "pink"))+
+  facet_wrap(~Celltype,ncol = 1)
+```
+   
+   
+   
+# 3.Visualization  
+```{r,eval=F}
+###### Lollipop chart #####
+Ctrl_tf_diff <- read.csv(paste0('F:/My_wsl/analysis/ST/output/cell_bin/Rscenic/'
+,runcell,'_scenic/output/diff/',runcell,'_Ctrl_vs_DKD.con.reg.diff.csv'))
+Ctrl_tf_diff$Group <- 'Ctrl'
+IRB_tf_diff <- read.csv(paste0('F:/My_wsl/analysis/ST/output/cell_bin/Rscenic/',
+ runcell,'_scenic/output/diff/',runcell,'_EB_vs_DKD.con.reg.diff.csv'))
+IRB_tf_diff$Group <- 'IRB'
+TFA_tf_diff <- read.csv(paste0('F:/My_wsl/analysis/ST/output/cell_bin/Rscenic/',runcell,
+                               '_scenic/output/diff/',runcell,
+                               '_HT_vs_DKD.con.reg.diff.csv'))
+TFA_tf_diff$Group <- 'TFA'
+
+tf_diff <-rbind(Ctrl_tf_diff,IRB_tf_diff,TFA_tf_diff)
+library(dplyr)
+tf_diff <- filter(tf_diff,DGE!="NC")
+# colnames(tf_diff)[1] <- 'Regulon'
+preserv_reg <- names(table(tf_diff$X))[table(tf_diff$X) > 1]
+tf_diff <- filter(tf_diff,X %in% preserv_reg)
+tf_diff <- filter(tf_diff, padj < 0.05 )
+# 绘制棒棒糖图
+ext_loc <- grepl('extend',tf_diff$X)
+tf_diff$pvalue_log10 <- -log10(tf_diff$padj)
+ggplot(tf_diff[ext_loc,], aes(x = reorder(X , log2FoldChange), 
+                    y = log2FoldChange , color = Group)) +
+  geom_segment(aes(x = X, xend = X, y = 0, 
+                   yend = log2FoldChange)) +
+  geom_point(aes(size = pvalue_log10), 
+             alpha = 0.5) +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "DEG Expression Changes",
+       x = "DEG",
+       y = "Log2 Fold Change") +
+  scale_color_manual(values = c("Ctrl" = "skyblue", "IRB" = "darkcyan", "TFA" = "pink"))
+
+ggsave(paste0('F:/My_wsl/analysis/ST/output/cell_bin/Rscenic/',
+              runcell,'_scenic/',runcell,
+              'extent_lolly_plot.pdf'),
+       width = 6.5,height = 6.5)
+```
+![](Figure 2A.jpg)  
+
+
+
+
+
+
+```{r,eval=F}
+ggsave(paste0('F:/My_wsl/analysis/ST/output/cell_bin/Rscenic/',
+              'total_diff_lolly_plot.pdf'),
+       width = 5,height = 8)
+dir.create('F:/My_wsl/analysis/ST/output/cell_bin/Rscenic/TF_gene_diff')
+
+DotPlot(clean_st[,clean_st$cell_bin_first_type=='SMC'],
+        features = c('Stat1'),group.by = 'Group')+
+  scale_color_gradientn(colors = c("#483D8B","#00FFFF","#F8F8FF","#FF69B4","#8B008B"))
+
+ggsave(filename = paste0('F:/My_wsl/analysis/ST/output/cell_bin/Rscenic/TF_gene_diff/',
+                         'PEC','_Stat1','.pdf'),
+       width = 7,height = 2.5)
+
+dir.create('F:/My_wsl/analysis/ST/output/cell_bin/Rscenic/receptor_gene_diff/')
+
+runcell <- 'PEC'
+rungene <- 'Itgb5'
+DotPlot(clean_st[,clean_st$cell_bin_first_type==runcell],
+        features = c(rungene),group.by = 'Group')+
+  scale_color_gradientn(colors = c("#483D8B","#00FFFF","#F8F8FF","#FF69B4","#8B008B"))
+
+ggsave(filename = paste0('F:/My_wsl/analysis/ST/output/cell_bin/Rscenic/receptor_gene_diff/',
+                         runcell,'_',rungene,'.pdf'),
+       width = 7,height = 2.5)
+
+st_gene <- c('Junb','Jun','Stat1','Jun','Cebpb',
+             'Ldlr','Tgfbr1','Itga3','Itgb5',
+             'Il12rb2','Klrc2')
+my_st_dimplot <- function(my_feature,st_obj){
+  mydata <- data.frame(feature = st_obj@assays$Spatial@data[my_feature,])
+  #mydata  <- scale(mydata )
+  mydata <- cbind(mydata,st_obj@meta.data)  
+  mydata <- filter(mydata,feature > 0 )
+  ggplot(mydata,
+         aes(x=x,y=y,col=feature))+
+    geom_point(size=0.1)+
+    theme_bw()+
+    theme_few()+
+    theme_classic()+
+    scale_color_gradientn(colors = c("#483D8B","#00FFFF","#F8F8FF","#FF69B4","#8B008B"))+
+    ggtitle(my_feature) +  # 设置标题
+    theme(axis.ticks = element_blank(), 
+          axis.text.x = element_blank(), 
+          axis.text.y = element_blank(), 
+          axis.title.x = element_blank(),  # 隐藏x轴标题
+          axis.title.y = element_blank(),  # 隐藏y轴标题
+          axis.line = element_line(arrow = arrow(length = unit(0.1, 'cm'))))
+  
+}
+
+dir.create("F:/My_wsl/analysis/ST/output/cell_bin/cellbin_RCTD/Spatial_gene")
+for (run_gene in unique(st_gene)) {
+  my_st_dimplot(run_gene,clean_st)+facet_wrap(~Group)
+  ggsave(filename  = paste0('F:/My_wsl/analysis/ST/output/cell_bin/cellbin_RCTD/Spatial_gene/',
+                    run_gene,"_st_dimplot.pdf"),
+      width = 4.2,height = 4)
+}
+
+
+run_gene <- 'Itgb5'
+run_cell <- 'Mac'
+my_st_dimplot(run_gene,clean_st[,clean_st$cell_bin_first_type==run_cell])+
+  facet_wrap(~Group)
+ggsave(filename  = paste0('F:/My_wsl/analysis/ST/output/cell_bin/cellbin_RCTD/Spatial_gene/',
+                          run_gene,'_',run_cell,
+                          "_st_dimplot.pdf"),
+       width = 4.2,height = 4)
+```
+![](Figure 2G.jpg)  
+  
+  
+```{r,eval=FALSE}
+library(Seurat)
+clean_st <- readRDS('cellchat/data/DATA4CellChat.rds')
+dir.create('scenic/inputdata',recursive = T)
+for (runsample in unique(clean_st$Sample)) {
+  write.table(clean_st[,clean_st$Sample == runsample]@assays$Spatial@counts,
+              paste0('scenic/inputdata/',runsample,'.txt') )
+  gc()
+}
+
+tf_reg <- readRDS('int/2.5_regulonTargetsInfo.Rds')# from scenic outputt
+head(tf_reg)
+tf_reg  <- filter(tf_reg,gene %in% sig_deg$Gene)
+tf_reg <- filter(tf_reg, TF %in% lapply(sig_reg, function(x){strsplit(x,split = ' ')[[1]][1]}) %>% unlist())
+
+
+tf_reg <- merge(tf_reg,
+                data.frame(gene_FC = sig_deg$avg_log2FC ,
+                            gene = sig_deg$Gene),
+                by = 'gene'
+                )# 合并gene foldchange数据
+
+sig_reg_df <- filter(tt,P.Value < 0.05)
+tf_reg <- merge(tf_reg,
+                data.frame(TF_FC =  sig_reg_df$logFC,
+                           TF = lapply(sig_reg, function(x){strsplit(x,split = ' ')[[1]][1]}) %>% unlist()
+                           ) 
+                ,by='TF'
+                )
+
+library(visNetwork)
+library(dplyr)
+library(scales)
+
+# 筛选特定的转录因子
+tf_reg <- filter(tf_reg, TF %in% c('Irf1', 'Sox10'))
+
+# 创建边数据框，包含 from, to, weight 列
+edges <- data.frame(
+  from = as.character(tf_reg$TF), 
+  to = as.character(tf_reg$gene), 
+  weight = tf_reg$spearCor
+)
+
+# 获取所有唯一的节点
+all_nodes <- unique(c(as.character(tf_reg$TF), as.character(tf_reg$gene)))
+
+# 创建节点数据框，包含 id 和 group 列
+nodes <- data.frame(id = all_nodes, group = ifelse(all_nodes %in% tf_reg$TF, "TF", "gene"))
+
+# 区分TF和基因，分别获取TF_FC和gene_FC的颜色
+tf_fc <- tf_reg$TF_FC[match(nodes$id, tf_reg$TF)]
+gene_fc <- tf_reg$gene_FC[match(nodes$id, tf_reg$gene)]
+
+# 初始化节点颜色
+node_colors <- rep('grey', length(all_nodes))
+
+# 设置 TF 节点的颜色
+tf_color_map <- col_numeric(palette = "PuBuGn", domain = range(tf_fc, na.rm = TRUE))
+node_colors[nodes$group == "TF"] <- tf_color_map(tf_fc[!is.na(tf_fc)])
+
+# 设置基因节点的颜色
+gene_color_map <- col_numeric(palette = "RdYlBu", domain = range(gene_fc, na.rm = TRUE))
+node_colors[nodes$group == "gene"] <- gene_color_map(gene_fc[!is.na(gene_fc)])
+
+# 添加颜色信息到节点数据框
+nodes$color <- node_colors
+
+# 设置边的颜色，使用 colorNumeric 函数创建颜色映射函数
+edge_color_fn <- col_numeric(palette =  colorRampPalette(c("#483D8B","#00FFFF","#F8F8FF","#FF69B4","#8B008B"))(100),
+domain = range(edges$weight, na.rm = TRUE))
+
+# 将颜色应用到边数据框
+edges$color <- edge_color_fn(edges$weight)
+
+# 可视化网络图
+visNetwork(nodes, edges) %>%
+  visNodes(size = 30, font = list(size = 30, vadjust = -5)) %>%  # 调整 vadjust 拉近标签
+  visEdges(arrows = "to", color = list(color = edges$color), width = 2) %>%
+  visOptions(highlightNearest = TRUE) %>%
+  visLayout(randomSeed = 123)
+
+library(clusterProfiler)
+
+ekegg <- enrichKEGG(seg_deg, organism='mgi',
+                    pvalueCutoff=0.05,pAdjustMethod='BH',qvalueCutoff=0.2,
+                    minGSSize=10,maxGSSize=500,use_internal_data=F)
+ekegg <- setReadable(ekegg,'org.Hs.eg.db','ENTREZID')
+
+# 使用cnetplot绘制前5个通路
+cnetplot(ekegg, foldChange = foldchange, showCategory = 5)
+```
+![](Figure 2E.jpg)        
+  
+

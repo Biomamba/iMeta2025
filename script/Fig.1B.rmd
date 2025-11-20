@@ -1,0 +1,104 @@
+---
+title: "Fig.1B"
+author: "Biomamba"
+date: "2025-08-11"
+output: openintro::lab_report
+---
+# 1.file read after singleR  
+```{r,eval=FALSE}
+rm(list = ls());gc()
+file_list <- list.files('F:/My_wsl/analysis/ST/output/02.cell_count/metadata/') 
+pca <- read.csv('F:/My_wsl/analysis/ST/output/02.cell_count/metadata/pca_metadata.csv')
+St_annotation <- read.csv('F:/My_wsl/analysis/ST/output/02.cell_count/metadata/St_annotation_metadata.csv')
+umap <- read.csv('F:/My_wsl/analysis/ST/output/02.cell_count/metadata/umap_metadata.csv')
+obs <- read.csv('F:/My_wsl/analysis/ST/output/02.cell_count/obs_metedata.csv')
+
+head(pca)
+head(St_annotation)
+head(umap)
+head(obs)
+```
+  
+  
+
+# 2.data merge  
+```{r,eval=FALSE}
+table(St_annotation$bins ==obs$X)
+
+colnames(umap) <- c('UMAP1','UMAP2')
+all_meta <- cbind(obs,pca,St_annotation,umap)
+library(dplyr)
+all_meta$Sample <- recode(all_meta$batch,
+                          '0'='Ctrl3','1' = 'Ctrl6','2'= 'DKD8','3'= 'DKD19', 
+                          '4'='EB11','5' = 'EB32','6'= 'HT15','7' ='HT31')
+
+all_meta$Group <- sapply(all_meta$Sample,function(x){gsub('//d','',x)})
+
+table(all_meta$first_labels==all_meta$group)
+
+
+table(all_meta$first_labels)
+<!-- # ALH B Cell  CD-IC  CD-PC    DCT    DLH    EnC    Mac     MC    Neu    NKC    PEC   Podo    PTC    SMC T Cell  -->
+<!-- # 362929  16146  23521  40727 177928  42771  63968  42841  17639  33914   8736  32059  15947 825486  17565   2209  -->
+
+table(all_meta$group)
+<!-- # ALH B Cell  CD-IC  CD-PC    DCT    DLH    EnC    Mac     MC    Neu    NKC    PEC   Podo    PTC    SMC T Cell  -->
+<!-- # 331594  17104  28281  42368 186308  40119  61514  43766  12675  26702   5027  42193  16675 850067  17374   2619  -->
+
+table(all_meta$Sample,all_meta$group)
+
+cell_color = c("#ADB6B6FF","#EE0000FF", "#008B45FF", "#631879FF", "#008280FF",  "#8A9045FF", "#A20056FF",   "#1B1919FF",               
+              "#BC3C29FF", "#0072B5FF", "#E18727FF",  "#7876B1FF", "#6F99ADFF", "#FFDC91FF", "#EE4C97FF", "#FDAF91FF")
+```
+
+
+
+
+# 3.Plot  
+```{r,eval=FALSE}
+legend
+pdf("colors.pdf", width=6, height=4)
+
+# legend plot
+barplot(rep(1, length(cell_color)), col=cell_color, border=NA, space=0, 
+        main="pre color", xlab="color", ylab="", axes=FALSE)
+
+dev.off()
+
+
+cell_order = c('PTC', 'DLH','ALH','DCT','CD-PC','CD-IC',
+              'EnC','PEC','Podo','SMC','MC',
+              'T Cell','Mac','B Cell','Neu','NKC')
+
+all_meta$group <- factor(all_meta$group,levels = cell_order) 
+
+library(ggthemes)
+p <- ggplot(all_meta,
+            aes(x=UMAP1,y=UMAP2,col=group))+
+  scale_color_manual(values = cell_color)+
+  geom_point(size=0.1)+
+  theme_bw()+
+  theme_few()+
+  theme_classic()+
+  stat_ellipse(aes(fill=group),
+               geom = "polygon",
+               linetype = 2,       
+               linewidth=1,              
+               alpha=0.2)+          
+  scale_fill_manual(values = cell_color)+
+  theme(axis.ticks = element_blank(), axis.text.y = element_blank())+# hide coord of axis
+  theme(axis.text.x = element_blank(),axis.text.y = element_blank())+# hide text of axis
+  theme(axis.line = element_line(arrow = arrow(length = unit(0.1, 'cm'))))
+
+p
+```
+![](./Figure 1 Btif.jpg)  
+
+```{r,eval=F}
+p1 <- p + facet_grid(group~ Group)
+ggsave(plot = p1,filename = 'F:/My_wsl/analysis/ST/output/02.cell_count/Celltype_Group_umap.pdf',width = 20,height = 20)
+
+```
+
+
+
