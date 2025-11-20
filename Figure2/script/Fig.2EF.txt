@@ -1,0 +1,32 @@
+############ 纤维化相关 ########## 
+fib_gene <- c("Tgfbr1", "Tgfbr2", "Col1a1", "Col3a1", "Acta2", "Fn1", 
+               "Mmp2", "Mmp9", "Ctgf", "Timp1", "Pdgfra", "Hif1a", 
+               "Klotho", "Smad2", "Smad3", "Ecad")
+
+
+DotPlot(clean_st,
+        features = c(fib_gene))+ 
+  scale_color_gradientn(colors = one_hundred_colors)+
+  theme( axis.text.x.bottom = element_text(angle = 45,hjust = 1,vjust = 1))
+
+clean_st <- AddModuleScore(clean_st,list(fib_gene),name = 'fib_gene')
+DotPlot(clean_st,features = 'fib_gene1',scale.by = 'size')+ 
+  scale_color_gradientn(colors = one_hundred_colors)+
+  theme( axis.text.x.bottom = element_text(angle = 45,hjust = 1,vjust = 1))
+ggsave(filename = 'output/cell_bin/Pathway_analysis/total/fibro_gene.pdf',
+       width = 3,height = 3)
+
+
+DotPlot(clean_st,features = 'fib_gene1',scale.by = 'size',group.by = 'response_to_hypoxia_level')+ 
+  scale_color_gradientn(colors = one_hundred_colors)+
+  theme( axis.text.x.bottom = element_text(angle = 45,hjust = 1,vjust = 1))
+ggsave(filename = 'output/cell_bin/Pathway_analysis/total/fibro_gene_hypoxia_level.pdf',
+       width = 3,height = 3)
+
+
+DotPlot(clean_st,features = 'beta_oxy1',scale.by = 'size',
+        group.by = 'Group')+ 
+  scale_color_gradientn(colors = one_hundred_colors)+
+  theme( axis.text.x.bottom = element_text(angle = 45,hjust = 1,vjust = 1))
+ggsave(filename = 'output/cell_bin/Pathway_analysis/total/fibro_gene_hypoxia_level.pdf',
+       width = 3,height = 3)
